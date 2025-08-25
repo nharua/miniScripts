@@ -1,0 +1,51 @@
+#!/usr/bin/env zsh
+
+# init-pyproject: Initialize a Python project with standard files
+
+# Usage:
+#   init-pyproject [project_name] [--venv]
+#
+# If project_name is provided, create and enter that directory.
+# Option --venv will also create a Python virtual environment in .venv/
+
+# Parse arguments
+venv_flag=false
+project_name=""
+
+for arg in "$@"; do
+  if [[ "$arg" == "--venv" ]]; then
+    venv_flag=true
+  else
+    project_name="$arg"
+  fi
+done
+
+# Create and enter project directory if name is given
+if [[ -n "$project_name" ]]; then
+  mkdir -p "$project_name"
+  cd "$project_name" || exit 1
+fi
+
+# 1. Initialize git repository with main branch
+git init -b main
+
+# 2. Create .env file
+touch .env
+
+# 3. Download Python.gitignore from GitHub
+wget -q https://github.com/github/gitignore/raw/refs/heads/main/Python.gitignore -O .gitignore
+
+# 4. Create LICENSE file with current year
+echo "Copyright $(date +%Y) NhaRua.com" > LICENSE
+
+# 5. Create README.md
+touch README.md
+
+# 6. Optionally create virtual environment
+if $venv_flag; then
+  python3 -m venv .venv
+  echo ".venv/" >> .gitignore
+fi
+
+echo "✅ Python project initialized in $(pwd)"
+
