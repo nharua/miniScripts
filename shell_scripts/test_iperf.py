@@ -7,6 +7,9 @@ from datetime import datetime
 
 # Convert speed string (10G, 1G, 500M, etc.) to bits per second
 def parse_speed(speed_str: str) -> float:
+    """
+    Convert speed string (10G, 1G, 500M, etc.) to bits per second
+    """
     speed_str = speed_str.strip().upper()
     if speed_str.endswith("G"):
         return float(speed_str[:-1]) * 1e9
@@ -20,6 +23,7 @@ def parse_speed(speed_str: str) -> float:
 
 # Extract throughput value from iperf3 output
 def parse_throughput(line: str) -> float | None:
+    """Extract throughput value from iperf3 output line"""
     match = re.search(r"([\d\.]+)\s+([KMG]?)bits/sec", line)
     if not match:
         return None
@@ -37,6 +41,9 @@ def parse_throughput(line: str) -> float | None:
 
 
 def log_alert(msg: str):
+    """
+    Log alert message with timestamp to iperf_alert.log
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open("iperf_alert.log", "a") as f:
         f.write(f"[{timestamp}] {msg}\n")
@@ -44,6 +51,8 @@ def log_alert(msg: str):
 
 
 def run_iperf(server: str, port: int, target_bps: float, duration: int, mode: str):
+    """Run iperf3 test and monitor throughput"""
+
     threshold = target_bps * 0.85  # alert if throughput < 85% of target
 
     while True:
@@ -64,7 +73,7 @@ def run_iperf(server: str, port: int, target_bps: float, duration: int, mode: st
         )
 
         try:
-            for line in process.stdout:
+            for line in process.stdout:  # type: ignore
                 line = line.strip()
                 throughput = parse_throughput(line)
                 if throughput:
