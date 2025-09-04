@@ -43,3 +43,57 @@ myproject/
 ├── LICENSE
 └── README.md
 ```
+
+## 2. test_iperf.py
+
+A Python wrapper for iperf3 to monitor network performance and log alerts if throughput falls below a threshold.
+
+### Features
+
+- Supports one-way, reverse, or bidirectional tests (--mode option).
+- Monitors throughput in real time and compares it against a user-defined target speed.
+- Logs alerts when throughput drops below 85% of target speed.
+- Option to run for a fixed duration (--duration) or indefinitely.
+- Logs are saved to iperf_alert.log in the same directory as the script.
+
+### Usage
+
+``` bash
+python3 test_iperf.py --target <speed> --server <host> [--port <port>] [--duration <seconds>] [--mode <mode>]
+```
+
+### Arguments
+
+```yaml
+--target : Target speed, e.g. 10G, 1G, 500M, 2.5G
+--server : Target server IP or hostname
+--port : Server port (default: 5201)
+--duration: Test duration in seconds (default: 10, 0 = infinite)
+--mode : Test mode:
+   normal → client → server
+   reverse → server → client
+   bidir → both directions
+```
+
+### Examples
+
+- Run a 10-second one-way test to 127.0.0.1 at 1 Gbps:
+```bash
+python3 test_iperf.py --target 1G --server 127.0.0.1 --duration 10 --mode normal
+```
+
+- Run a bidirectional test indefinitely to remote host:
+```bash
+python3 test_iperf.py --target 5G --server 192.168.1.100 --duration 0 --mode bidir
+```
+
+### Example Output
+
+```
+Target speed: 5G (5000.00 Mbps)
+Running for 10 seconds
+Test mode: bidir
+OK: 4720.00 Mbps
+[2025-09-04 11:38:50] Low throughput: 3610.00 Mbps (< 85% of 5G)
+```
+
