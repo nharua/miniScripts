@@ -2,14 +2,14 @@
 import argparse
 import subprocess
 import re
+import sys
+import os
+import pty
+import select
 from datetime import datetime
 
 
-# Convert speed string (10G, 1G, 500M, etc.) to bits per second
 def parse_speed(speed_str: str) -> float:
-    """
-    Convert speed string (10G, 1G, 500M, etc.) to bits per second
-    """
     speed_str = speed_str.strip().upper()
     if speed_str.endswith("G"):
         return float(speed_str[:-1]) * 1e9
@@ -21,15 +21,15 @@ def parse_speed(speed_str: str) -> float:
         return float(speed_str)
 
 
-# Extract throughput value from iperf3 output
 def parse_throughput(line: str) -> float | None:
-    """Extract throughput value from iperf3 output line"""
+    # Clean ANSI escape sequences first
+    line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+
     match = re.search(r"([\d\.]+)\s+([KMG]?)bits/sec", line)
     if not match:
         return None
     value = float(match.group(1))
     unit = match.group(2)
-
     if unit == "G":
         return value * 1e9
     elif unit == "M":
@@ -41,57 +41,168 @@ def parse_throughput(line: str) -> float | None:
 
 
 def log_alert(msg: str):
-    """
-    Log alert message with timestamp to iperf_alert.log
-    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open("iperf_alert.log", "a") as f:
         f.write(f"[{timestamp}] {msg}\n")
     print(f"[{timestamp}] {msg}")
+    sys.stdout.flush()
 
 
-def run_iperf(server: str, port: int, target_bps: float, duration: int, mode: str):
-    """Run iperf3 test and monitor throughput"""
-
-    threshold = target_bps * 0.85  # alert if throughput < 85% of target
+def run_iperf_pty(server: str, port: int, target_bps: float, duration: int, mode: str):
+    """Run iperf3 using PTY to get real-time output"""
+    threshold = target_bps * 0.85
 
     while True:
         cmd = ["iperf3", "-c", server, "-p", str(port), "-i", "1"]
-
         if duration > 0:
             cmd += ["-t", str(duration)]
         else:
-            cmd += ["-t", "0"]  # run indefinitely
+            cmd += ["-t", "0"]
 
         if mode == "bidir":
             cmd += ["--bidir"]
         elif mode == "reverse":
             cmd += ["--reverse"]
 
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
+        print(f"Running command: {' '.join(cmd)}")
 
         try:
-            for line in process.stdout:  # type: ignore
-                line = line.strip()
-                throughput = parse_throughput(line)
-                if throughput:
-                    if throughput < threshold:
-                        log_alert(
-                            f"Low throughput: {throughput/1e6:.2f} Mbps (< 85% of target) target was {target_bps/1e6:.2f} Mbps"
-                        )
-                    else:
-                        print(f"OK: {throughput/1e6:.2f} Mbps")
+            # Create a pseudo terminal
+            master_fd, slave_fd = pty.openpty()
+
+            # Start process with PTY
+            process = subprocess.Popen(
+                cmd,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                universal_newlines=True,
+            )
+
+            # Close slave fd in parent process
+            os.close(slave_fd)
+
+            # Read from master fd
+            buffer = ""
+            while process.poll() is None:
+                try:
+                    # Use select to avoid blocking
+                    ready, _, _ = select.select([master_fd], [], [], 0.1)
+                    if ready:
+                        data = os.read(master_fd, 1024).decode("utf-8", errors="ignore")
+                        if data:
+                            buffer += data
+
+                            # Process complete lines
+                            while "\n" in buffer:
+                                line, buffer = buffer.split("\n", 1)
+                                line = line.strip()
+
+                                if line:
+                                    # Remove ANSI escape sequences
+                                    clean_line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+
+                                    # print(f"[REALTIME] {clean_line}")
+                                    sys.stdout.flush()
+
+                                    if "bits/sec" in clean_line:
+                                        throughput = parse_throughput(clean_line)
+                                        if throughput:
+                                            if throughput < threshold:
+                                                log_alert(
+                                                    f"Low throughput: {throughput/1e6:.2f} Mbps (< 85% of target) target was {target_bps/1e6:.2f} Mbps"
+                                                )
+                                            else:
+                                                print(
+                                                    f"✓ OK: {throughput/1e6:.2f} Mbps"
+                                                )
+                                                sys.stdout.flush()
+
+                except OSError:
+                    break
+
+            # Clean up
+            os.close(master_fd)
+            process.wait()
+
         except KeyboardInterrupt:
-            print("Stopping test.")
-            process.terminate()
+            print("\nStopping test.")
+            try:
+                process.terminate()  # pyright: ignore
+                os.close(master_fd)  # pyright: ignore
+            except:
+                pass
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+            try:
+                process.terminate()  # pyright: ignore
+                os.close(master_fd)  # pyright: ignore
+            except:
+                pass
             break
 
-        process.wait()
+        if duration > 0:
+            break
+
+
+def run_iperf_simple(
+    server: str, port: int, target_bps: float, duration: int, mode: str
+):
+    """Alternative: Run iperf3 with expect-like approach"""
+    threshold = target_bps * 0.85
+
+    while True:
+        cmd = f"unbuffer iperf3 -c {server} -p {port} -i 1"
+        if duration > 0:
+            cmd += f" -t {duration}"
+        else:
+            cmd += " -t 0"
+
+        if mode == "bidir":
+            cmd += " --bidir"
+        elif mode == "reverse":
+            cmd += " --reverse"
+
+        print(f"Running: {cmd}")
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1,
+            )
+
+            for line in process.stdout:  # type: ignore
+                line = line.strip()
+                if line:
+                    print(f"[UNBUFFER] {line}")
+                    sys.stdout.flush()
+
+                    if "bits/sec" in line:
+                        throughput = parse_throughput(line)
+                        if throughput:
+                            if throughput < threshold:
+                                log_alert(
+                                    f"Low throughput: {throughput/1e6:.2f} Mbps (< 85% of target)"
+                                )
+                            else:
+                                print(f"✓ OK: {throughput/1e6:.2f} Mbps")
+                                sys.stdout.flush()
+
+        except KeyboardInterrupt:
+            print("\nStopping test.")
+            process.terminate()  # pyright: ignore
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+            break
 
         if duration > 0:
-            break  # run only once if duration is fixed
+            break
 
 
 if __name__ == "__main__":
@@ -110,17 +221,23 @@ if __name__ == "__main__":
         "--mode",
         choices=["client", "reverse", "bidir"],
         default="client",
-        help="Test mode: client (one way), reverse (server → client), bidir (both directions)",
+        help="Test mode",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["pty", "unbuffer"],
+        default="pty",
+        help="Method: pty (pseudo terminal) or unbuffer (requires expect package)",
     )
 
     args = parser.parse_args()
-
     target_bps = parse_speed(args.target)
-    print(f"Target speed: {args.target} ({target_bps/1e6:.2f} Mbps)")
-    if args.duration == 0:
-        print("Running indefinitely (press Ctrl+C to stop)")
-    else:
-        print(f"Running for {args.duration} seconds")
-    print(f"Test mode: {args.mode}")
 
-    run_iperf(args.server, args.port, target_bps, args.duration, args.mode)
+    print(f"Target speed: {args.target} ({target_bps/1e6:.2f} Mbps)")
+    print(f"Method: {args.method}")
+
+    if args.method == "pty":
+        run_iperf_pty(args.server, args.port, target_bps, args.duration, args.mode)
+    else:
+        # Requires: sudo apt-get install expect
+        run_iperf_simple(args.server, args.port, target_bps, args.duration, args.mode)
