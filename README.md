@@ -8,6 +8,7 @@ The repository is organized into the following main directories:
 
 * **`audio_scripts/`**: Contains scripts for processing audio files.
 * **`video_scripts/`**: Contains scripts for video manipulation, such as converting formats and extracting subtitles.
+* **`shell_scripts/`**: Contains general-purpose shell utilities and helpers scripts.
 
 ## Usage
 
