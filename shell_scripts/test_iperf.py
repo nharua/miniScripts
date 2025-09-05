@@ -21,23 +21,36 @@ def parse_speed(speed_str: str) -> float:
         return float(speed_str)
 
 
-def parse_throughput(line: str) -> float | None:
+def parse_throughput(line: str) -> tuple[float, str] | None:
     # Clean ANSI escape sequences first
     line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-
-    match = re.search(r"([\d\.]+)\s+([KMG]?)bits/sec", line)
+    # print(f"DEBUG line repr: {repr(line)}")
+    match = re.search(r"([\d\.]+)\s*([KMG]?)\s*bits/sec", line)
     if not match:
         return None
     value = float(match.group(1))
     unit = match.group(2)
+    throughput = 0.0
     if unit == "G":
-        return value * 1e9
+        throughput = value * 1e9
     elif unit == "M":
-        return value * 1e6
+        throughput = value * 1e6
     elif unit == "K":
-        return value * 1e3
+        throughput = value * 1e3
     else:
-        return value
+        throughput = value
+
+    direction = ""
+    if "[SUM]" in line:
+        direction = "SUM"
+    elif "[TX-S]" in line or "[TX-C]" in line:
+        direction = "TX"
+    elif "[RX-S]" in line or "[RX-C]" in line:
+        direction = "RX"
+    else:
+        direction = "CLIENT"
+
+    return throughput, direction
 
 
 def log_alert(msg: str):
@@ -106,11 +119,13 @@ def run_iperf_pty(server: str, port: int, target_bps: float, duration: int, mode
                                     sys.stdout.flush()
 
                                     if "bits/sec" in clean_line:
-                                        throughput = parse_throughput(clean_line)
-                                        if throughput:
+                                        throughput, direction = parse_throughput(
+                                            clean_line
+                                        )
+                                        if throughput is not None:
                                             if throughput < threshold:
                                                 log_alert(
-                                                    f"Low throughput: {throughput/1e6:.2f} Mbps (< 85% of target) target was {target_bps/1e6:.2f} Mbps"
+                                                    f"Low throughput: [{direction}] {throughput/1e6:.2f} Mbps (< 85% of target) target was {target_bps/1e6:.2f} Mbps"
                                                 )
                                             else:
                                                 print(
@@ -183,11 +198,11 @@ def run_iperf_simple(
                     sys.stdout.flush()
 
                     if "bits/sec" in line:
-                        throughput = parse_throughput(line)
-                        if throughput:
+                        throughput, direction = parse_throughput(line)
+                        if throughput is not None:
                             if throughput < threshold:
                                 log_alert(
-                                    f"Low throughput: {throughput/1e6:.2f} Mbps (< 85% of target)"
+                                    f"Low throughput: [{direction}] {throughput/1e6:.2f} Mbps (< 85% of target)"
                                 )
                             else:
                                 print(f"✓ OK: {throughput/1e6:.2f} Mbps")
